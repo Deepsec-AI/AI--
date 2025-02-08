@@ -85,6 +85,8 @@ python port_scanner.py
 ## 使用说明
 
 ### 端口扫描
+![1739012564253](https://github.com/user-attachments/assets/a2e16c1a-1dce-48cb-9962-1cc869cddc40)
+
 1. 切换到"端口扫描"选项卡
 2. 输入目标IP地址
 3. 设置端口范围（起始端口-结束端口）
@@ -93,6 +95,8 @@ python port_scanner.py
 6. 点击"开始扫描"按钮
 
 ### 目录扫描
+![1739012586027](https://github.com/user-attachments/assets/16169027-1ec5-494f-a2b9-955323f3ef66)
+
 1. 切换到"目录扫描"选项卡
 2. 输入目标URL（需包含http://或https://）
 3. 选择扫描字典类型或导入自定义字典
@@ -100,6 +104,8 @@ python port_scanner.py
 5. 点击"开始扫描"按钮
 
 ### 子域名爆破
+![1739012603450](https://github.com/user-attachments/assets/3639dead-6c27-4da3-86ea-979e8e13a02b)
+
 1. 切换到"子域名爆破"选项卡
 2. 输入目标域名（如example.com）
 3. 选择字典类型或导入自定义字典
@@ -108,6 +114,8 @@ python port_scanner.py
 6. 点击"开始扫描"按钮
 
 ### POC测试
+![1739012618721](https://github.com/user-attachments/assets/2a8e60fd-d1b5-40ed-93a2-40ab04cc6d7d)
+
 1. 切换到"POC测试"选项卡
 2. 输入目标URL
 3. 选择POC模板或编写自定义POC
@@ -115,6 +123,8 @@ python port_scanner.py
 5. 点击"开始测试"按钮
 
 ### IP溯源
+![1739012640491](https://github.com/user-attachments/assets/c3c26eb0-fbd1-450d-abf2-ed7c116b0732)
+
 1. 切换到"IP溯源"选项卡
 2. 输入目标IP地址
 3. 点击"查询位置"按钮
