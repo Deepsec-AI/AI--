@@ -1,6 +1,8 @@
 # 通用扫描器
 
 这是一个具有现代化界面的网络安全工具，使用Python开发，支持多种扫描和测试功能。
+<img width="547" alt="1739008472886" src="https://github.com/user-attachments/assets/b967dfd2-edf7-4197-b003-ce4ae01d1a24" />
+
 
 ## 功能特点
 
@@ -160,3 +162,7 @@ python port_scanner.py
 ## 免责声明
 
 本工具仅用于安全测试和学习研究，使用者需自行承担因使用不当造成的任何后果。 
+
+
+交流群：
+![c645108c192d5cf2e2bb48f18a3590e](https://github.com/user-attachments/assets/008f83cc-6f3d-4a93-a809-2609717c9aaf)
