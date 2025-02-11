@@ -6,9 +6,17 @@ import time
 import requests
 import json
 import dns.resolver
+import os
+import re
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from urllib.parse import urljoin, urlparse
+
+# AI API导入
+import openai
+import google.generativeai as genai
+from anthropic import Anthropic
+from openai import OpenAI
 
 class Scanner(ctk.CTk):
     def __init__(self):
@@ -20,13 +28,31 @@ class Scanner(ctk.CTk):
         
         # 配置窗口
         self.title("通用扫描器")
-        self.geometry("800x600")
-        self.minsize(800, 600)
+        self.geometry("1000x800")  # 增加窗口大小
+        self.minsize(1000, 800)
         
         # 初始化变量
         self.scan_thread = None
         self.stop_scan = False
         self.result_queue = queue.Queue()
+        
+        # 初始化AI API密钥和地址
+        self.ai_api_keys = {
+            'openai': '',
+            'gemini': '',
+            'anthropic': '',
+            'deepseek': '',
+            'kimi': ''  # 添加Kimi API密钥
+        }
+        
+        # 初始化AI API地址
+        self.ai_api_urls = {
+            'openai': 'https://api.openai.com/v1/chat/completions',
+            'gemini': 'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent',
+            'anthropic': 'https://api.anthropic.com/v1/messages',
+            'deepseek': 'https://api.deepseek.com/v1/chat/completions',
+            'kimi': 'https://api.moonshot.cn/v1/chat/completions'
+        }
         
         # 创建主框架
         self.create_widgets()
@@ -42,6 +68,7 @@ class Scanner(ctk.CTk):
         self.subdomain_tab = self.tabview.add("子域名爆破")
         self.poc_tab = self.tabview.add("POC测试")
         self.ip_trace_tab = self.tabview.add("IP溯源")
+        self.code_audit_tab = self.tabview.add("代码审计")  # 新增代码审计选项卡
         
         # 创建各个界面
         self.create_port_scan_widgets()
@@ -49,6 +76,7 @@ class Scanner(ctk.CTk):
         self.create_subdomain_scan_widgets()
         self.create_poc_test_widgets()
         self.create_ip_trace_widgets()
+        self.create_code_audit_widgets()  # 新增代码审计界面
         
     def create_port_scan_widgets(self):
         # 创建左侧面板
@@ -388,6 +416,22 @@ class Scanner(ctk.CTk):
                 elif result[0] == "dir":
                     _, url, status_code, size = result
                     self.dir_result_tree.insert("", "end", values=(url, status_code, size))
+                elif result[0] == "subdomain":
+                    _, domain, ip_addresses, status = result
+                    self.subdomain_result_tree.insert("", "end", values=(domain, ip_addresses, status))
+                elif result[0] == "audit":
+                    _, vuln = result
+                    # 插入审计结果到树形视图
+                    self.audit_result_tree.insert("", "end", values=(
+                        vuln['file'],
+                        vuln['type'],
+                        vuln['line'],
+                        vuln['level'],
+                        vuln['description'],
+                        vuln.get('code', '')  # 添加代码片段
+                    ))
+                    # 自动滚动到最新结果
+                    self.audit_result_tree.yview_moveto(1)
             except queue.Empty:
                 break
         
@@ -1032,16 +1076,16 @@ class Scanner(ctk.CTk):
                 
                 # 更新状态
                 self.subdomain_status_label.configure(text=f"正在扫描 {scanned}/{total}")
-                
+            
             if not self.stop_scan:
                 self.subdomain_status_label.configure(text="扫描完成")
             else:
                 self.subdomain_status_label.configure(text="扫描已停止")
-                
+            
             self.subdomain_start_button.configure(state="normal")
             self.subdomain_stop_button.configure(state="disabled")
             self.stop_scan = False
-            
+        
         self.scan_thread = threading.Thread(target=run_scan)
         self.scan_thread.daemon = True
         self.scan_thread.start()
@@ -1094,6 +1138,693 @@ class Scanner(ctk.CTk):
             self.trace_result_text.insert("0.0", output)
         except Exception as e:
             messagebox.showerror("错误", f"查询失败: {str(e)}")
+
+    def create_code_audit_widgets(self):
+        # 创建左侧面板
+        left_frame = ctk.CTkFrame(self.code_audit_tab)
+        left_frame.pack(side="left", fill="y", padx=10, pady=10)
+        
+        # 文件夹选择
+        folder_frame = ctk.CTkFrame(left_frame)
+        folder_frame.pack(fill="x", pady=5)
+        
+        self.folder_label = ctk.CTkLabel(folder_frame, text="选择代码目录:", font=("微软雅黑", 12))
+        self.folder_label.pack(pady=5)
+        
+        self.folder_path = ctk.CTkEntry(folder_frame, width=200)
+        self.folder_path.pack(pady=5)
+        
+        self.select_folder_button = ctk.CTkButton(folder_frame, text="浏览", 
+                                                command=self.select_code_folder)
+        self.select_folder_button.pack(pady=5)
+
+        # 文件列表显示
+        files_frame = ctk.CTkFrame(left_frame)
+        files_frame.pack(fill="both", expand=True, pady=5)
+        
+        files_label = ctk.CTkLabel(files_frame, text="文件列表:", font=("微软雅黑", 12))
+        files_label.pack(pady=5)
+        
+        # 创建文件列表树形视图
+        self.files_tree = ttk.Treeview(files_frame, show="tree", selectmode="extended")
+        self.files_tree.pack(fill="both", expand=True, pady=5)
+        
+        # 添加滚动条
+        files_scroll = ttk.Scrollbar(files_frame, orient="vertical", 
+                                   command=self.files_tree.yview)
+        self.files_tree.configure(yscrollcommand=files_scroll.set)
+        files_scroll.pack(side="right", fill="y")
+        
+        # 文件类型选择
+        file_type_frame = ctk.CTkFrame(left_frame)
+        file_type_frame.pack(fill="x", pady=10)
+        
+        file_type_label = ctk.CTkLabel(file_type_frame, text="选择文件类型:", font=("微软雅黑", 12))
+        file_type_label.pack(pady=5)
+        
+        self.file_types = {
+            "PHP": ".php",
+            "Java": ".java",
+            "ASP": ".asp",
+            "JavaScript": ".js"
+        }
+        
+        self.file_type_vars = {}
+        for file_type in self.file_types:
+            var = ctk.BooleanVar(value=True)
+            self.file_type_vars[file_type] = var
+            checkbox = ctk.CTkCheckBox(file_type_frame, text=file_type, 
+                                     variable=var, command=self.update_file_list)
+            checkbox.pack(pady=2)
+        
+        # AI设置
+        ai_frame = ctk.CTkFrame(left_frame)
+        ai_frame.pack(fill="x", pady=10)
+        
+        ai_label = ctk.CTkLabel(ai_frame, text="AI设置:", font=("微软雅黑", 12))
+        ai_label.pack(pady=5)
+        
+        # AI选择
+        self.ai_var = ctk.StringVar(value="ChatGPT")
+        ai_options = ["ChatGPT", "Gemini", "Claude", "DeepSeek", "Kimi"]  # 添加Kimi选项
+        self.ai_menu = ctk.CTkOptionMenu(ai_frame, values=ai_options, variable=self.ai_var)
+        self.ai_menu.pack(pady=5)
+        
+        # API密钥设置按钮
+        self.api_key_button = ctk.CTkButton(ai_frame, text="设置API密钥", 
+                                          command=self.show_api_key_dialog)
+        self.api_key_button.pack(pady=5)
+        
+        # 控制按钮
+        self.audit_start_button = ctk.CTkButton(left_frame, text="开始审计", 
+                                              command=self.start_code_audit)
+        self.audit_start_button.pack(pady=10)
+        
+        self.audit_stop_button = ctk.CTkButton(left_frame, text="停止审计", 
+                                             command=self.stop_scanning, state="disabled")
+        self.audit_stop_button.pack(pady=5)
+        
+        # 创建右侧结果显示区域
+        right_frame = ctk.CTkFrame(self.code_audit_tab)
+        right_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+        
+        # 进度条
+        self.audit_progress_var = ctk.DoubleVar()
+        self.audit_progress_bar = ctk.CTkProgressBar(right_frame)
+        self.audit_progress_bar.pack(fill="x", padx=10, pady=5)
+        self.audit_progress_bar.set(0)
+        
+        # 状态标签
+        self.audit_status_label = ctk.CTkLabel(right_frame, text="就绪", font=("微软雅黑", 12))
+        self.audit_status_label.pack(pady=5)
+        
+        # 结果显示（使用Treeview和Text组合）
+        self.audit_result_frame = ctk.CTkFrame(right_frame)
+        self.audit_result_frame.pack(fill="both", expand=True, pady=5)
+        
+        # 创建结果树形视图
+        columns = ("文件", "类型", "行号", "漏洞等级", "漏洞描述")
+        self.audit_result_tree = ttk.Treeview(self.audit_result_frame, 
+                                            columns=columns, show="headings")
+        
+        # 设置列标题和宽度
+        self.audit_result_tree.heading("文件", text="文件")
+        self.audit_result_tree.heading("类型", text="类型")
+        self.audit_result_tree.heading("行号", text="行号")
+        self.audit_result_tree.heading("漏洞等级", text="漏洞等级")
+        self.audit_result_tree.heading("漏洞描述", text="漏洞描述")
+        
+        # 设置列宽
+        self.audit_result_tree.column("文件", width=200)
+        self.audit_result_tree.column("类型", width=80)
+        self.audit_result_tree.column("行号", width=60)
+        self.audit_result_tree.column("漏洞等级", width=80)
+        self.audit_result_tree.column("漏洞描述", width=300)
+        
+        # 添加滚动条
+        tree_scroll = ttk.Scrollbar(self.audit_result_frame, orient="vertical", 
+                                  command=self.audit_result_tree.yview)
+        self.audit_result_tree.configure(yscrollcommand=tree_scroll.set)
+        
+        self.audit_result_tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+        
+        # 详细信息显示
+        self.detail_frame = ctk.CTkFrame(right_frame)
+        self.detail_frame.pack(fill="both", expand=True, pady=5)
+        
+        detail_label = ctk.CTkLabel(self.detail_frame, text="漏洞详情:", font=("微软雅黑", 12))
+        detail_label.pack(pady=5)
+        
+        self.detail_text = ctk.CTkTextbox(self.detail_frame, height=200)
+        self.detail_text.pack(fill="both", expand=True, pady=5)
+        
+        # 绑定树形视图选择事件
+        self.audit_result_tree.bind('<<TreeviewSelect>>', self.show_vulnerability_detail)
+
+    def select_code_folder(self):
+        folder_path = filedialog.askdirectory(title="选择代码目录")
+        if folder_path:
+            self.folder_path.delete(0, "end")
+            self.folder_path.insert(0, folder_path)
+            self.update_file_list()
+
+    def update_file_list(self):
+        folder_path = self.folder_path.get()
+        if not folder_path or not os.path.exists(folder_path):
+            return
+            
+        # 清空当前文件列表
+        for item in self.files_tree.get_children():
+            self.files_tree.delete(item)
+            
+        # 获取选中的文件类型
+        selected_extensions = []
+        for file_type, var in self.file_type_vars.items():
+            if var.get():
+                selected_extensions.append(self.file_types[file_type])
+        
+        # 添加文件到树形视图
+        for root, dirs, files in os.walk(folder_path):
+            # 创建相对路径
+            rel_path = os.path.relpath(root, folder_path)
+            if rel_path == ".":
+                parent = ""
+            else:
+                # 确保父目录已创建
+                parent_path = os.path.dirname(rel_path)
+                if parent_path:
+                    parent = parent_path.replace(os.sep, "/")
+                else:
+                    parent = ""
+                
+                # 创建当前目录节点
+                dir_name = os.path.basename(rel_path)
+                dir_id = rel_path.replace(os.sep, "/")
+                if not self.files_tree.exists(dir_id):
+                    self.files_tree.insert(parent, "end", dir_id, text=dir_name)
+            
+            # 添加文件
+            for file in files:
+                file_ext = os.path.splitext(file)[1].lower()
+                if file_ext in selected_extensions:
+                    file_path = os.path.join(rel_path, file).replace(os.sep, "/")
+                    if rel_path == ".":
+                        self.files_tree.insert("", "end", file_path, text=file)
+                    else:
+                        self.files_tree.insert(rel_path.replace(os.sep, "/"), "end", file_path, text=file)
+
+    def show_api_key_dialog(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("设置API密钥和地址")
+        dialog.geometry("600x400")
+        
+        # 创建滚动框架
+        canvas = ctk.CTkCanvas(dialog)
+        scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=canvas.yview)
+        scrollable_frame = ctk.CTkFrame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # 为每个AI服务创建输入框
+        entries = {}
+        url_entries = {}
+        
+        for i, (service, key) in enumerate(self.ai_api_keys.items()):
+            # API密钥设置
+            key_frame = ctk.CTkFrame(scrollable_frame)
+            key_frame.pack(fill="x", padx=20, pady=5)
+            
+            key_label = ctk.CTkLabel(key_frame, text=f"{service} API密钥:")
+            key_label.pack(side="left", padx=5)
+            
+            key_entry = ctk.CTkEntry(key_frame, width=300, show="*")
+            key_entry.pack(side="left", padx=5)
+            key_entry.insert(0, key)
+            entries[service] = key_entry
+            
+            # API地址设置
+            url_frame = ctk.CTkFrame(scrollable_frame)
+            url_frame.pack(fill="x", padx=20, pady=5)
+            
+            url_label = ctk.CTkLabel(url_frame, text=f"{service} API地址:")
+            url_label.pack(side="left", padx=5)
+            
+            url_entry = ctk.CTkEntry(url_frame, width=300)
+            url_entry.pack(side="left", padx=5)
+            url_entry.insert(0, self.ai_api_urls.get(service, ""))
+            url_entries[service] = url_entry
+        
+        def save_settings():
+            for service, entry in entries.items():
+                self.ai_api_keys[service] = entry.get()
+            for service, entry in url_entries.items():
+                self.ai_api_urls[service] = entry.get()
+            dialog.destroy()
+            messagebox.showinfo("成功", "API设置已保存")
+        
+        save_button = ctk.CTkButton(scrollable_frame, text="保存", command=save_settings)
+        save_button.pack(pady=20)
+        
+        # 打包滚动组件
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def analyze_code_with_ai(self, code, file_type):
+        selected_ai = self.ai_var.get()
+        try:
+            if selected_ai == "ChatGPT":
+                if not self.ai_api_keys['openai']:
+                    raise ValueError("请先设置OpenAI API密钥")
+                    
+                client = OpenAI(
+                    api_key=self.ai_api_keys['openai'],
+                    base_url=self.ai_api_urls['openai']
+                )
+                
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的代码安全审计专家，请分析以下代码中的安全漏洞，并提供详细的漏洞利用方法。"},
+                        {"role": "user", "content": f"""分析以下{file_type}代码的安全漏洞，并按以下格式输出:
+1. 漏洞类型
+2. 漏洞描述
+3. 漏洞危害
+4. 利用方法
+5. 修复建议
+
+代码内容:
+{code}"""}
+                    ]
+                )
+                return response.choices[0].message.content
+                
+            elif selected_ai == "Gemini":
+                if not self.ai_api_keys['gemini']:
+                    raise ValueError("请先设置Gemini API密钥")
+                    
+                genai.configure(api_key=self.ai_api_keys['gemini'])
+                model = genai.GenerativeModel('gemini-pro')
+                response = model.generate_content(
+                    f"""作为代码安全审计专家，分析以下{file_type}代码的安全漏洞，并按以下格式输出:
+1. 漏洞类型
+2. 漏洞描述
+3. 漏洞危害
+4. 利用方法
+5. 修复建议
+
+代码内容:
+{code}"""
+                )
+                return response.text
+                
+            elif selected_ai == "Claude":
+                if not self.ai_api_keys['anthropic']:
+                    raise ValueError("请先设置Anthropic API密钥")
+                    
+                client = Anthropic(api_key=self.ai_api_keys['anthropic'])
+                message = client.messages.create(
+                    model="claude-3-opus-20240229",
+                    max_tokens=4096,
+                    messages=[{
+                        "role": "user",
+                        "content": f"""作为代码安全审计专家，分析以下{file_type}代码的安全漏洞，并按以下格式输出:
+1. 漏洞类型
+2. 漏洞描述
+3. 漏洞危害
+4. 利用方法
+5. 修复建议
+
+代码内容:
+{code}"""
+                    }]
+                )
+                return message.content[0].text
+                
+            elif selected_ai == "DeepSeek":
+                if not self.ai_api_keys['deepseek']:
+                    raise ValueError("请先设置DeepSeek API密钥")
+                    
+                client = OpenAI(
+                    api_key=self.ai_api_keys['deepseek'],
+                    base_url="https://api.deepseek.com/v1"
+                )
+                
+                response = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的代码安全审计专家，请分析以下代码中的安全漏洞，并提供详细的漏洞利用方法。"},
+                        {"role": "user", "content": f"""分析以下{file_type}代码的安全漏洞，并按以下格式输出:
+1. 漏洞类型
+2. 漏洞描述
+3. 漏洞危害
+4. 利用方法
+5. 修复建议
+
+代码内容:
+{code}"""}
+                    ]
+                )
+                return response.choices[0].message.content
+                
+            elif selected_ai == "Kimi":
+                if not self.ai_api_keys['kimi']:
+                    raise ValueError("请先设置Kimi API密钥")
+                    
+                client = OpenAI(
+                    api_key=self.ai_api_keys['kimi'],
+                    base_url="https://api.moonshot.cn/v1"
+                )
+                
+                response = client.chat.completions.create(
+                    model="moonshot-v1-8k",
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的代码安全审计专家，请分析以下代码中的安全漏洞，并提供详细的漏洞利用方法。"},
+                        {"role": "user", "content": f"""分析以下{file_type}代码的安全漏洞，并按以下格式输出:
+1. 漏洞类型
+2. 漏洞描述
+3. 漏洞危害
+4. 利用方法
+5. 修复建议
+
+代码内容:
+{code}"""}
+                    ]
+                )
+                return response.choices[0].message.content
+                
+        except Exception as e:
+            return f"AI分析失败: {str(e)}"
+
+    def analyze_php_code(self, file_path):
+        vulnerabilities = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+                
+            # 常见PHP漏洞模式
+            patterns = {
+                'SQL注入': r'mysql_query\s*\(\s*\$[^,)]*\)',
+                '命令执行': r'(system|exec|shell_exec|passthru)\s*\([^)]*\$[^)]*\)',
+                '文件包含': r'(include|require|include_once|require_once)\s*\([^)]*\$[^)]*\)',
+                'XSS': r'echo\s+\$_(GET|POST|REQUEST|COOKIE)',
+                '文件操作': r'(fopen|file_get_contents|file_put_contents)\s*\([^)]*\$[^)]*\)'
+            }
+            
+            for vuln_type, pattern in patterns.items():
+                matches = re.finditer(pattern, code)
+                for match in matches:
+                    line_number = code[:match.start()].count('\n') + 1
+                    vulnerabilities.append({
+                        'file': file_path,
+                        'type': 'PHP',
+                        'line': line_number,
+                        'level': '高危',
+                        'description': f'发现潜在的{vuln_type}漏洞',
+                        'code': match.group()
+                    })
+            
+            # 使用AI进行深度分析
+            ai_analysis = self.analyze_code_with_ai(code, 'PHP')
+            if ai_analysis:
+                vulnerabilities.append({
+                    'file': file_path,
+                    'type': 'PHP',
+                    'line': 0,
+                    'level': '待确认',
+                    'description': 'AI分析结果',
+                    'code': ai_analysis
+                })
+                
+        except Exception as e:
+            vulnerabilities.append({
+                'file': file_path,
+                'type': 'PHP',
+                'line': 0,
+                'level': '错误',
+                'description': f'分析失败: {str(e)}',
+                'code': ''
+            })
+            
+        return vulnerabilities
+
+    def analyze_java_code(self, file_path):
+        vulnerabilities = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+                
+            # 常见Java漏洞模式
+            patterns = {
+                'SQL注入': r'Statement\s*\.\s*execute\s*\([^)]*\+',
+                '命令执行': r'Runtime\s*\.\s*exec\s*\([^)]*\)',
+                '反序列化': r'ObjectInputStream|readObject\s*\(',
+                'XSS': r'response\s*\.\s*getWriter\s*\(\s*\)\s*\.\s*print',
+                '文件操作': r'new\s+File\s*\([^)]*\)'
+            }
+            
+            for vuln_type, pattern in patterns.items():
+                matches = re.finditer(pattern, code)
+                for match in matches:
+                    line_number = code[:match.start()].count('\n') + 1
+                    vulnerabilities.append({
+                        'file': file_path,
+                        'type': 'Java',
+                        'line': line_number,
+                        'level': '高危',
+                        'description': f'发现潜在的{vuln_type}漏洞',
+                        'code': match.group()
+                    })
+            
+            # 使用AI进行深度分析
+            ai_analysis = self.analyze_code_with_ai(code, 'Java')
+            if ai_analysis:
+                vulnerabilities.append({
+                    'file': file_path,
+                    'type': 'Java',
+                    'line': 0,
+                    'level': '待确认',
+                    'description': 'AI分析结果',
+                    'code': ai_analysis
+                })
+                
+        except Exception as e:
+            vulnerabilities.append({
+                'file': file_path,
+                'type': 'Java',
+                'line': 0,
+                'level': '错误',
+                'description': f'分析失败: {str(e)}',
+                'code': ''
+            })
+            
+        return vulnerabilities
+
+    def analyze_asp_code(self, file_path):
+        vulnerabilities = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+                
+            # 常见ASP漏洞模式
+            patterns = {
+                'SQL注入': r'Execute\s*\([^)]*Request',
+                '命令执行': r'wscript.shell|Shell.Application',
+                'XSS': r'Response.Write\s*\([^)]*Request',
+                '文件操作': r'FileSystemObject|SaveAs|CreateTextFile'
+            }
+            
+            for vuln_type, pattern in patterns.items():
+                matches = re.finditer(pattern, code, re.IGNORECASE)
+                for match in matches:
+                    line_number = code[:match.start()].count('\n') + 1
+                    vulnerabilities.append({
+                        'file': file_path,
+                        'type': 'ASP',
+                        'line': line_number,
+                        'level': '高危',
+                        'description': f'发现潜在的{vuln_type}漏洞',
+                        'code': match.group()
+                    })
+            
+            # 使用AI进行深度分析
+            ai_analysis = self.analyze_code_with_ai(code, 'ASP')
+            if ai_analysis:
+                vulnerabilities.append({
+                    'file': file_path,
+                    'type': 'ASP',
+                    'line': 0,
+                    'level': '待确认',
+                    'description': 'AI分析结果',
+                    'code': ai_analysis
+                })
+                
+        except Exception as e:
+            vulnerabilities.append({
+                'file': file_path,
+                'type': 'ASP',
+                'line': 0,
+                'level': '错误',
+                'description': f'分析失败: {str(e)}',
+                'code': ''
+            })
+            
+        return vulnerabilities
+
+    def analyze_js_code(self, file_path):
+        vulnerabilities = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+                
+            # 常见JavaScript漏洞模式
+            patterns = {
+                'XSS': r'innerHTML|document\.write',
+                '命令执行': r'eval\s*\([^)]*\)',
+                '不安全的JSON解析': r'JSON\.parse\s*\([^)]*\)',
+                'DOM操作': r'getElementById|querySelector',
+                '敏感信息': r'localStorage|sessionStorage'
+            }
+            
+            for vuln_type, pattern in patterns.items():
+                matches = re.finditer(pattern, code)
+                for match in matches:
+                    line_number = code[:match.start()].count('\n') + 1
+                    vulnerabilities.append({
+                        'file': file_path,
+                        'type': 'JavaScript',
+                        'line': line_number,
+                        'level': '中危',
+                        'description': f'发现潜在的{vuln_type}漏洞',
+                        'code': match.group()
+                    })
+            
+            # 使用AI进行深度分析
+            ai_analysis = self.analyze_code_with_ai(code, 'JavaScript')
+            if ai_analysis:
+                vulnerabilities.append({
+                    'file': file_path,
+                    'type': 'JavaScript',
+                    'line': 0,
+                    'level': '待确认',
+                    'description': 'AI分析结果',
+                    'code': ai_analysis
+                })
+                
+        except Exception as e:
+            vulnerabilities.append({
+                'file': file_path,
+                'type': 'JavaScript',
+                'line': 0,
+                'level': '错误',
+                'description': f'分析失败: {str(e)}',
+                'code': ''
+            })
+            
+        return vulnerabilities
+
+    def start_code_audit(self):
+        # 获取选中的文件
+        selected_items = self.files_tree.selection()
+        if not selected_items:
+            messagebox.showerror("错误", "请选择要审计的文件")
+            return
+            
+        folder_path = self.folder_path.get()
+        if not folder_path or not os.path.exists(folder_path):
+            messagebox.showerror("错误", "请选择有效的代码目录")
+            return
+            
+        # 清空之前的结果
+        for item in self.audit_result_tree.get_children():
+            self.audit_result_tree.delete(item)
+        self.detail_text.delete("0.0", "end")
+        
+        # 更新界面状态
+        self.audit_start_button.configure(state="disabled")
+        self.audit_stop_button.configure(state="normal")
+        self.audit_progress_bar.set(0)
+        
+        def run_audit():
+            total_files = len(selected_items)
+            processed_files = 0
+            
+            for item_id in selected_items:
+                if self.stop_scan:
+                    break
+                    
+                file_path = os.path.join(folder_path, item_id)
+                file_ext = os.path.splitext(file_path)[1].lower()
+                
+                # 根据文件类型选择相应的分析方法
+                if file_ext == '.php':
+                    vulnerabilities = self.analyze_php_code(file_path)
+                elif file_ext == '.java':
+                    vulnerabilities = self.analyze_java_code(file_path)
+                elif file_ext == '.asp':
+                    vulnerabilities = self.analyze_asp_code(file_path)
+                elif file_ext == '.js':
+                    vulnerabilities = self.analyze_js_code(file_path)
+                
+                # 更新结果
+                for vuln in vulnerabilities:
+                    self.result_queue.put(("audit", vuln))
+                
+                processed_files += 1
+                progress = processed_files / total_files
+                self.audit_progress_var.set(progress)
+                self.audit_progress_bar.set(progress)
+                
+                # 更新状态
+                self.audit_status_label.configure(
+                    text=f"正在扫描: {processed_files}/{total_files}"
+                )
+            
+            if not self.stop_scan:
+                self.audit_status_label.configure(text="扫描完成")
+            else:
+                self.audit_status_label.configure(text="扫描已停止")
+                
+            self.audit_start_button.configure(state="normal")
+            self.audit_stop_button.configure(state="disabled")
+            self.stop_scan = False
+        
+        self.scan_thread = threading.Thread(target=run_audit)
+        self.scan_thread.daemon = True
+        self.scan_thread.start()
+        
+        self.update_results()
+
+    def show_vulnerability_detail(self, event):
+        selection = self.audit_result_tree.selection()
+        if not selection:
+            return
+            
+        item = self.audit_result_tree.item(selection[0])
+        values = item['values']
+        
+        # 清空详情文本框
+        self.detail_text.delete("0.0", "end")
+        
+        # 显示详细信息
+        detail = f"文件: {values[0]}\n"
+        detail += f"类型: {values[1]}\n"
+        detail += f"行号: {values[2]}\n"
+        detail += f"等级: {values[3]}\n"
+        detail += f"描述: {values[4]}\n\n"
+        
+        # 如果有代码片段，显示代码
+        if len(values) > 5:
+            detail += "相关代码:\n"
+            detail += values[5]
+        
+        self.detail_text.insert("0.0", detail)
 
 if __name__ == "__main__":
     app = Scanner()
